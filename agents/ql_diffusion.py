@@ -8,7 +8,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.optim.lr_scheduler import CosineAnnealingLR
 from utils.logger import logger
-
+import wandb
 from agents.diffusion import Diffusion
 from agents.model import MLP
 from agents.helpers import EMA
@@ -65,6 +65,7 @@ class Diffusion_QL(object):
                  lr_decay=False,
                  lr_maxt=1000,
                  grad_norm=1.0,
+                 num_steps_per_epoch=1000,
                  ):
 
         self.model = MLP(state_dim=state_dim, action_dim=action_dim, device=device)
@@ -75,6 +76,7 @@ class Diffusion_QL(object):
 
         self.lr_decay = lr_decay
         self.grad_norm = grad_norm
+        self.num_steps_per_epoch = num_steps_per_epoch
 
         self.step = 0
         self.step_start_ema = step_start_ema
@@ -164,14 +166,15 @@ class Diffusion_QL(object):
             self.step += 1
 
             """ Log """
-            if log_writer is not None:
-                if self.grad_norm > 0:
-                    log_writer.add_scalar('Actor Grad Norm', actor_grad_norms.max().item(), self.step)
-                    log_writer.add_scalar('Critic Grad Norm', critic_grad_norms.max().item(), self.step)
-                log_writer.add_scalar('BC Loss', bc_loss.item(), self.step)
-                log_writer.add_scalar('QL Loss', q_loss.item(), self.step)
-                log_writer.add_scalar('Critic Loss', critic_loss.item(), self.step)
-                log_writer.add_scalar('Target_Q Mean', target_q.mean().item(), self.step)
+            if self.step // self.num_steps_per_epoch == 0:
+                wandb.log({
+                    'BC Loss': bc_loss.item(),
+                    'QL Loss': q_loss.item(),
+                    'Actor Loss': actor_loss.item(),
+                    'Critic Loss': critic_loss.item(),
+                    'Actor Grad Norm': actor_grad_norms.max().item(),
+                    'Critic Grad Norm': critic_grad_norms.max().item()
+                }, step=self.step // self.num_steps_per_epoch)
 
             metric['actor_loss'].append(actor_loss.item())
             metric['bc_loss'].append(bc_loss.item())

@@ -7,6 +7,7 @@ import numpy as np
 import os
 import torch
 import json
+import wandb
 
 import d4rl
 from utils import utils
@@ -37,7 +38,7 @@ hyperparameters = {
     'kitchen-mixed-v0':              {'lr': 3e-4, 'eta': 0.005, 'max_q_backup': False,  'reward_tune': 'no',          'eval_freq': 50, 'num_epochs': 1000, 'gn': 10.0, 'top_k': 0},
 }
 
-def train_agent(env, state_dim, action_dim, max_action, device, output_dir, args):
+def train_agent(env, state_dim, action_dim, max_action, device, output_dir, args, wandb_run):
     # Load buffer
     dataset = d4rl.qlearning_dataset(env)
     data_sampler = Data_Sampler(dataset, device, args.reward_tune)
@@ -58,7 +59,8 @@ def train_agent(env, state_dim, action_dim, max_action, device, output_dir, args
                       lr=args.lr,
                       lr_decay=args.lr_decay,
                       lr_maxt=args.num_epochs,
-                      grad_norm=args.gn)
+                      grad_norm=args.gn,
+                      num_steps_per_epoch=args.num_steps_per_epoch)
     elif args.algo == 'bc':
         from agents.bc_diffusion import Diffusion_BC as Agent
         agent = Agent(state_dim=state_dim,
@@ -89,15 +91,6 @@ def train_agent(env, state_dim, action_dim, max_action, device, output_dir, args
         training_iters += iterations
         curr_epoch = int(training_iters // int(args.num_steps_per_epoch))
 
-        # Logging
-        utils.print_banner(f"Train step: {training_iters}", separator="*", num_star=90)
-        logger.record_tabular('Trained Epochs', curr_epoch)
-        logger.record_tabular('BC Loss', np.mean(loss_metric['bc_loss']))
-        logger.record_tabular('QL Loss', np.mean(loss_metric['ql_loss']))
-        logger.record_tabular('Actor Loss', np.mean(loss_metric['actor_loss']))
-        logger.record_tabular('Critic Loss', np.mean(loss_metric['critic_loss']))
-        logger.dump_tabular()
-
         # Evaluation
         eval_res, eval_res_std, eval_norm_res, eval_norm_res_std = eval_policy(agent, args.env_name, args.seed,
                                                                                eval_episodes=args.eval_episodes)
@@ -105,10 +98,15 @@ def train_agent(env, state_dim, action_dim, max_action, device, output_dir, args
                             np.mean(loss_metric['bc_loss']), np.mean(loss_metric['ql_loss']),
                             np.mean(loss_metric['actor_loss']), np.mean(loss_metric['critic_loss']),
                             curr_epoch])
-        np.save(os.path.join(output_dir, "eval"), evaluations)
-        logger.record_tabular('Average Episodic Reward', eval_res)
-        logger.record_tabular('Average Episodic N-Reward', eval_norm_res)
-        logger.dump_tabular()
+        scores = np.array(evaluations)
+        best_id = np.argmax(scores[:, 2])
+        wandb.log({
+                'Return': eval_res,
+                'Normalized Return': eval_norm_res,
+                'Best Normalized Return': scores[best_id, 2],
+                'Best Normalized Return std': scores[best_id, 3],
+                'Epoch': curr_epoch
+            })
 
         bc_loss = np.mean(loss_metric['bc_loss'])
         if args.early_stop:
@@ -118,32 +116,16 @@ def train_agent(env, state_dim, action_dim, max_action, device, output_dir, args
 
         if args.save_best_model:
             agent.save_model(output_dir, curr_epoch)
-
-    # Model Selection: online or offline
-    scores = np.array(evaluations)
-    if args.ms == 'online':
-        best_id = np.argmax(scores[:, 2])
-        best_res = {'model selection': args.ms, 'epoch': scores[best_id, -1],
-                    'best normalized score avg': scores[best_id, 2],
-                    'best normalized score std': scores[best_id, 3],
-                    'best raw score avg': scores[best_id, 0],
-                    'best raw score std': scores[best_id, 1]}
-        with open(os.path.join(output_dir, f"best_score_{args.ms}.txt"), 'w') as f:
-            f.write(json.dumps(best_res))
-    elif args.ms == 'offline':
-        bc_loss = scores[:, 4]
-        top_k = min(len(bc_loss) - 1, args.top_k)
-        where_k = np.argsort(bc_loss) == top_k
-        best_res = {'model selection': args.ms, 'epoch': scores[where_k][0][-1],
-                    'best normalized score avg': scores[where_k][0][2],
-                    'best normalized score std': scores[where_k][0][3],
-                    'best raw score avg': scores[where_k][0][0],
-                    'best raw score std': scores[where_k][0][1]}
-
-        with open(os.path.join(output_dir, f"best_score_{args.ms}.txt"), 'w') as f:
-            f.write(json.dumps(best_res))
-
-    # writer.close()
+        path = f"{wandb_run.dir}/model.pth"
+        torch.save({
+            'actor': agent.actor.state_dict(),
+            'critic': agent.critic.state_dict()
+        }, path)  # save policy network in *.pth
+        model_artifact = wandb.Artifact(wandb_run.id, type="model", description=f"Normalilzed return: {eval_norm_res}")
+        model_artifact.add_file(path)
+        wandb.save(path, base_path=wandb_run.dir)
+        wandb_run.log_artifact(model_artifact)
+        
 
 
 # Runs policy for X episodes and returns average reward
@@ -254,11 +236,12 @@ if __name__ == "__main__":
     variant.update(max_action=max_action)
     setup_logger(os.path.basename(results_dir), variant=variant, log_dir=results_dir)
     utils.print_banner(f"Env: {args.env_name}, state_dim: {state_dim}, action_dim: {action_dim}")
-
+    wandb_run = wandb.init(project='diffusion-ql', mode='online', name=f'test')
     train_agent(env,
                 state_dim,
                 action_dim,
                 max_action,
                 args.device,
                 results_dir,
-                args)
+                args,
+                wandb_run)
