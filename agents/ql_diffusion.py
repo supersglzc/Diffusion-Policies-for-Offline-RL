@@ -166,7 +166,7 @@ class Diffusion_QL(object):
             self.step += 1
 
             """ Log """
-            if self.step // self.num_steps_per_epoch == 0:
+            if self.step % self.num_steps_per_epoch == 0:
                 wandb.log({
                     'BC Loss': bc_loss.item(),
                     'QL Loss': q_loss.item(),
