@@ -20,53 +20,57 @@ rewards = [6.0, 4.0, 2.5, 1.0]
 reward_sigma = 0.05
 
 # Generate samples from Gaussian distributions
-samples = np.empty((0, 2), dtype=np.float32)
+samples = []
 aaa = []
 bbb = []
 colors = ['red', 'green', 'blue', 'purple']
 for center, color, reward, z in zip(centers, colors, rewards, zs):
     cluster_samples = np.random.normal(loc=center, scale=sigma, size=(samples_per_cluster, 2))
-    samples = np.vstack((samples, cluster_samples))
+    samples.append(cluster_samples)
     samples_reward = compute_reward(cluster_samples, center, reward)
     aaa.append(samples_reward)
     bbb.append(z.unsqueeze(0).repeat(samples_per_cluster, 1))
-    plt.scatter(cluster_samples[:, 0], cluster_samples[:, 1], color=color, alpha=0.5, label=f'Center {center}, r {reward}')
-# Plotting
-plt.title('Scatter Plot of Actions from Gaussian Distributions')
-plt.xlabel('Action Dimension 1')
-plt.ylabel('Action Dimension 2')
-plt.legend()
-plt.show()
+#     plt.scatter(cluster_samples[:, 0], cluster_samples[:, 1], color=color, alpha=0.5, label=f'Center {center}, r {reward}')
+# # Plotting
+# plt.title('Scatter Plot of Actions from Gaussian Distributions')
+# plt.xlabel('Action Dimension 1')
+# plt.ylabel('Action Dimension 2')
+# plt.legend()
+# plt.show()
 
 # Clip samples to ensure they remain in the range [-1, 1]^2
+samples = np.concatenate(samples)
 samples = np.clip(samples, -1, 1)
 rewards = np.concatenate(aaa)
 z_embed = torch.cat(bbb, dim=0)
 
 if use_z:
-    Qnet = MLPNet(in_dim=2+5, out_dim=1, hidden_layers=[256, 256, 128])
+    Qnet = MLPNet(in_dim=2+5, out_dim=1, hidden_layers=[256, 256, 128, 64])
 else:
-    Qnet = MLPNet(in_dim=2, out_dim=1)
-Qnet_optimizer = torch.optim.AdamW(Qnet.parameters(), 0.0005)
+    Qnet = MLPNet(in_dim=2, out_dim=1, hidden_layers=[256, 256, 128, 64])
+Qnet_optimizer = torch.optim.AdamW(Qnet.parameters(), 0.001)
 
+samples_tensor = torch.tensor(samples, dtype=torch.float32)
+rewards_tensor = torch.tensor(rewards, dtype=torch.float32).view(-1, 1)
 batch_size = 500
-for iter in range(2000):
-    prev = 0
+
+# Training Loop
+for epoch in range(1000):
+    permutation = torch.randperm(samples_tensor.size()[0])
     losses = []
+    prev = 0
     for j in range(M // batch_size):
-        b_a = torch.tensor(samples[prev:prev+batch_size], dtype=torch.float32)
-        b_z = z_embed[prev:prev+batch_size]
-        b_input = torch.cat([b_a, b_z], dim=1)
-        b_r = torch.tensor(rewards[prev:prev+batch_size], dtype=torch.float32)
+        batch_x = samples_tensor[prev:prev+batch_size]
         if use_z:
-            pred = Qnet(b_input)
-        else:
-            pred = Qnet(b_a)
-        loss = nn.functional.mse_loss(pred, b_r)
+            batch_z = z_embed[prev:prev+batch_size]
+            batch_x = torch.cat([batch_x, batch_z], dim=1)
+        batch_y = rewards_tensor[prev:prev+batch_size]
+        pred = Qnet(batch_x)
+        loss = nn.functional.mse_loss(pred, batch_y)
         grad_norm = optimizer_update(Qnet_optimizer, loss)
         losses.append(loss.item())
         prev += batch_size
-    print(iter, np.array(losses).mean())
+    print(epoch, np.array(losses).mean())
 # torch.save(Qnet.state_dict(), '/home/supersglzc/code/Diffusion-Policies-for-Offline-RL/Qnet-z.pth')
 
 # weight = torch.load('/home/supersglzc/code/Diffusion-Policies-for-Offline-RL/Qnet-z.pth')

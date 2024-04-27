@@ -34,9 +34,22 @@ class MLPNet(nn.Module):
 
     def forward(self, x):
         return self.net(x)
+    
+class SimpleNN(nn.Module):
+    def __init__(self):
+        super(SimpleNN, self).__init__()
+        self.fc1 = nn.Linear(2, 10)
+        self.fc2 = nn.Linear(10, 10)
+        self.output = nn.Linear(10, 1)
+        self.relu = nn.ReLU()
+    
+    def forward(self, x):
+        x = self.relu(self.fc1(x))
+        x = self.relu(self.fc2(x))
+        x = self.output(x)
+        return x
 
-
-def compute_reward(samples, center, max_reward, max_distance=0.3):
+def compute_reward(samples, center, max_reward, max_distance=1.0):
     distances = np.sqrt((samples[:, 0] - center[0]) ** 2 + (samples[:, 1] - center[1]) ** 2)
     rewards = max_reward * (1 - distances / max_distance)
     rewards = np.maximum(0, rewards)
