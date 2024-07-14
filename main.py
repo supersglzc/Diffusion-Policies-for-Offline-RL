@@ -72,6 +72,17 @@ def train_agent(env, state_dim, action_dim, max_action, device, output_dir, args
                       beta_schedule=args.beta_schedule,
                       n_timesteps=args.T,
                       lr=args.lr)
+    elif args.algo == 'svgd':
+        from agents.svgd_diffusion import Diffusion_SVGD as Agent
+        agent = Agent(state_dim=state_dim,
+                      action_dim=action_dim,
+                      max_action=max_action,
+                      device=device,
+                      discount=args.discount,
+                      tau=args.tau,
+                      beta_schedule=args.beta_schedule,
+                      n_timesteps=args.T,
+                      lr=args.lr)
 
     early_stop = False
     stop_check = utils.EarlyStopping(tolerance=1, min_delta=0.)
@@ -80,7 +91,6 @@ def train_agent(env, state_dim, action_dim, max_action, device, output_dir, args
     evaluations = []
     training_iters = 0
     max_timesteps = args.num_epochs * args.num_steps_per_epoch
-    metric = 100.
     utils.print_banner(f"Training Start", separator="*", num_star=90)
     while (training_iters < max_timesteps) and (not early_stop):
         iterations = int(args.eval_freq * args.num_steps_per_epoch)
@@ -94,10 +104,7 @@ def train_agent(env, state_dim, action_dim, max_action, device, output_dir, args
         # Evaluation
         eval_res, eval_res_std, eval_norm_res, eval_norm_res_std = eval_policy(agent, args.env_name, args.seed,
                                                                                eval_episodes=args.eval_episodes)
-        evaluations.append([eval_res, eval_res_std, eval_norm_res, eval_norm_res_std,
-                            np.mean(loss_metric['bc_loss']), np.mean(loss_metric['ql_loss']),
-                            np.mean(loss_metric['actor_loss']), np.mean(loss_metric['critic_loss']),
-                            curr_epoch])
+        evaluations.append([eval_res, eval_res_std, eval_norm_res, eval_norm_res_std, curr_epoch])
         scores = np.array(evaluations)
         best_id = np.argmax(scores[:, 2])
         wandb.log({
@@ -107,12 +114,6 @@ def train_agent(env, state_dim, action_dim, max_action, device, output_dir, args
                 'Best Normalized Return std': scores[best_id, 3],
                 'Epoch': curr_epoch
             })
-
-        bc_loss = np.mean(loss_metric['bc_loss'])
-        if args.early_stop:
-            early_stop = stop_check(metric, bc_loss)
-
-        metric = bc_loss
 
         if args.save_best_model:
             agent.save_model(output_dir, curr_epoch)
@@ -236,7 +237,7 @@ if __name__ == "__main__":
     variant.update(max_action=max_action)
     setup_logger(os.path.basename(results_dir), variant=variant, log_dir=results_dir)
     utils.print_banner(f"Env: {args.env_name}, state_dim: {state_dim}, action_dim: {action_dim}")
-    wandb_run = wandb.init(project='diffusion-ql', mode='online', name=f'test')
+    wandb_run = wandb.init(project='diffusion-ql', mode='online', name=f'svgd')
     train_agent(env,
                 state_dim,
                 action_dim,
